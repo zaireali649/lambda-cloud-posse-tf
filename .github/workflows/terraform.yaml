@@ -1,0 +1,138 @@
+name: '[DP]Lambda'
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  TF_IN_AUTOMATION: true
+  DP_WORKING_DIR: '.'
+  DP_AWS_REGION: 'us-east-1'
+  DP_ENV: 'dev'
+
+defaults:
+  run:
+    working-directory: '.'
+
+jobs:
+  terraform-check:
+    name: 'Terraform check'
+    runs-on: [ ubuntu-latest ]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 1.1.4
+      - name: Terraform fmt
+        id: fmt
+        run: terraform fmt -check
+        continue-on-error: true
+
+  terraform-plan:
+    name: 'Terraform plan'
+    needs: 'terraform-check'
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 1.1.4
+
+      - name: AWS Assume Role
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{ env.DP_AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan-${{ env.DP_ENV }}
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: tfplan-${{ env.DP_ENV }}
+          path: ${{ env.DP_WORKING_DIR }}/tfplan-${{ env.DP_ENV }}
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: lambda_files
+          path: ${{ env.DP_WORKING_DIR }}/files
+
+      - name: Update PR
+        uses: actions/github-script@0.9.0
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            <details><summary>Show Plan</summary>
+            \`\`\`hcl\n
+            ${process.env.PLAN}
+            \`\`\`\n
+            </details>
+            *Workflow: \`${{ github.workflow }}\`*`;
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  terraform-apply:
+    needs: 'terraform-plan'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 1.1.4
+
+      - name: AWS Assume Role
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{ env.DP_AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - uses: actions/download-artifact@v2
+        with:
+          name: tfplan-${{ env.DP_ENV }}
+          path: ${{ env.DP_WORKING_DIR }}/
+
+      - uses: actions/download-artifact@v2
+        with:
+          name: lambda_files
+          path: ${{ env.DP_WORKING_DIR }}/files
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Apply
+        id: apply
+        run: terraform apply tfplan-${{ env.DP_ENV }}
