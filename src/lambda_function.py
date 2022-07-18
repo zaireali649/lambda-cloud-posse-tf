@@ -1,6 +1,4 @@
-from loader import Loader
-
-LOADER = Loader()
+import pandas as pd
 
 def lambda_handler(event, context):
-    LOADER.logger.info("demo function log")
+    print("Hello World")
