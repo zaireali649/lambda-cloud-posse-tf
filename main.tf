@@ -6,22 +6,12 @@ data "archive_file" "function_code" {
   output_path      = "${path.module}/files/lambda_function.zip"
 }
 
-data "archive_file" "layer_code" {
-  type             = "zip"
-  source_dir       = "${path.module}/src/shared/"
-  output_file_mode = "0666"
-  output_path      = "${path.module}/files/lambda_layer.zip"
-}
-
 module "demo_function" {
-  source           = "./modules/lambda"
-  depends_on = [data.archive_file.function_code, data.archive_file.layer_code]
-  name             = "demo-function"
-  filename         = data.archive_file.function_code.output_path
-  source_code_hash = data.archive_file.function_code.output_base64sha256
+  source  = "cloudposse/lambda-function/aws"
 
-  create_layer           = true
-  layer_filename         = data.archive_file.layer_code.output_path
-  layer_source_code_hash = data.archive_file.layer_code.output_base64sha256
-  
+  filename      = data.archive_file.function_code.output_path
+  function_name = "demo-function"
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.8"
+  layers = ["arn:aws:lambda:us-east-1:458806987020:layer:pandas_38_layer:1"]
 }
